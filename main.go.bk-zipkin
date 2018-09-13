@@ -1,0 +1,68 @@
+package main
+
+import (
+	"os"
+	"fmt"
+	"time"
+	"net/http"
+
+	zipkin "github.com/openzipkin/zipkin-go"
+	zipkinmodel "github.com/openzipkin/zipkin-go/model"
+	zipkinreporter "github.com/openzipkin/zipkin-go/reporter/http"
+	zipkinprop "github.com/openzipkin/zipkin-go/propagation/b3"
+)
+
+type defaultbackend struct {
+	tracer *zipkin.Tracer
+}
+
+func (db *defaultbackend) helloWorldHandler(w http.ResponseWriter, r *http.Request) {
+	spanName := "hello-world"
+
+	sc := db.tracer.Extract(zipkinprop.ExtractHTTP(r))
+
+	remoteEndpoint, _ := zipkin.NewEndpoint("", r.RemoteAddr)
+
+	sp := db.tracer.StartSpan(
+		spanName,
+		zipkin.Lind(zipkinmodel.Server),
+		zipkin.Parent(sc),
+		zipkin.RemoteEndpoint(remoteEndpoint),
+	)
+
+	ctx. zipkin.NewContext(r.Context(), sp)
+
+	fmt.Fprintf(w, "Hello World\n")
+}
+
+
+func  main() {
+	var zipkinAddr string
+	zipkinAddr, ok := os.LookupEnv("ZIPKIN")
+	if !ok { zipkinAddr =  "http://zipkin:9411/api/v2/spans"; }
+
+	fmt.Println("attaching to zipkin at: ",zipkinAddr)
+
+	reporter := zipkinreporter.NewReporter(zipkinAddr)
+
+	localEndpoint := &zipkinmodel.Endpoint{
+		ServiceName: "default-backend",
+		Port: 8080,
+	}
+
+	sampler, err := zipkin.NewCountingSampler(1)
+	if err != nil {
+		panic(err)
+	}
+
+	tracer, err := zipkin.NewTracer(
+		reporter,
+		zipkin.WithSampler(sampler),
+		zipkin.WithLocalEndpoint(localEndpoint),
+	)
+
+	backend := &defaultbackend{tracer}
+
+	http.HandleFunc("/",backend.helloWorldHandler)
+	http.ListenAndServe(":8080", nil)
+}
